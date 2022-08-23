@@ -64,6 +64,45 @@ impl MemorySet {
             None,
         );
     }
+
+    pub fn insert_framed_area_in_user(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        port: usize,
+    ) {
+        let mut permission = MapPermission::U;
+        if port & 0x1 != 0 {
+            permission |= MapPermission::R;
+        }
+        if port & 0x2 != 0 {
+            permission |= MapPermission::W;
+        }
+        if port & 0x4 != 0 {
+            permission |= MapPermission::X;
+        }
+
+        self.push(
+            MapArea::new(start_va, end_va, MapType::Framed, permission),
+            None,
+        );
+    }
+
+    pub fn dealloc_framed_area(&mut self, start: VirtAddr, end: VirtAddr) {
+        let start_vpn: VirtPageNum = start.floor();
+        let end_vpn: VirtPageNum = end.ceil();
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+        let mut remove_index = 0;
+        for (index, area) in self.areas.iter().enumerate() {
+            if area.vpn_range == vpn_range {
+                remove_index = index;
+                break;
+            }
+        }
+        self.areas[remove_index].unmap(&mut self.page_table);
+        self.areas.remove(remove_index);
+    }
+
     pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
         if let Some((idx, area)) = self
             .areas
@@ -82,6 +121,42 @@ impl MemorySet {
         }
         self.areas.push(map_area);
     }
+
+    pub fn is_mem_area_exists(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let start_vpn: VirtPageNum = start.floor();
+        let end_vpn: VirtPageNum = end.ceil();
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+        for vpn in vpn_range {
+            for area in &self.areas {
+                if let Some(_elem) = area.data_frames.get(&vpn) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn is_mem_area_not_exists(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let start_vpn: VirtPageNum = start.floor();
+        let end_vpn: VirtPageNum = end.ceil();
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+        for vpn in vpn_range {
+            let mut flag = false;
+            for area in &self.areas {
+                if let Some(_elem) = area.data_frames.get(&vpn) {
+                    flag = true;
+                }
+                if flag {
+                    break;
+                }
+            }
+            if !flag {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
         self.page_table.map(

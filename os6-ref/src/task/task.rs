@@ -2,8 +2,8 @@
 
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT;
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::config::{TRAP_CONTEXT, MAX_SYSCALL_NUM, PAGE_SIZE, PRIORITY_DEFAULT, BIG_STRIDE};
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE, get_allocatable_number};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
@@ -24,6 +24,25 @@ pub struct TaskControlBlock {
     pub kernel_stack: KernelStack,
     // mutable
     inner: UPSafeCell<TaskControlBlockInner>,
+}
+
+#[derive(Copy, Clone)]
+pub struct Pass(u64);
+
+impl PartialOrd for Pass {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self.0.abs_diff(other.0) <= (BIG_STRIDE / 2) {
+            Some(self.0.partial_cmp(&other.0).unwrap())
+        } else {
+            Some(self.0.partial_cmp(&other.0).unwrap().reverse())
+        }
+    }
+}
+
+impl PartialEq for Pass {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
 }
 
 /// Structure containing more process content
@@ -50,6 +69,10 @@ pub struct TaskControlBlockInner {
     /// It is set when active exit or execution error occurs
     pub exit_code: i32,
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
+    pub exec_start_time: usize,
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+    pub priority: isize,
+    pub pass: Pass,
 }
 
 /// Simple access to its internal fields
@@ -124,6 +147,10 @@ impl TaskControlBlock {
                         // 2 -> stderr
                         Some(Arc::new(Stdout)),
                     ],
+                    exec_start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    priority: PRIORITY_DEFAULT,
+                    pass: Pass(0),
                 })
             },
         };
@@ -138,6 +165,58 @@ impl TaskControlBlock {
         );
         task_control_block
     }
+
+    pub fn spawn(self: &Arc<TaskControlBlock>, elf_data: &[u8]) -> Arc<TaskControlBlock> {
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT).into())
+            .unwrap()
+            .ppn();
+
+        let mut parent_inner = self.inner_exclusive_access();
+        let pid_handle = pid_alloc();
+        let kernel_stack = KernelStack::new(&pid_handle);
+        let kernel_stack_top = kernel_stack.get_top();
+        let task_control_block = Arc::new(TaskControlBlock {
+            pid: pid_handle,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    memory_set,
+                    parent: Some(Arc::downgrade(self)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    fd_table: alloc::vec![
+                        // 0 -> stdin
+                        Some(Arc::new(Stdin)),
+                        // 1 -> stdout
+                        Some(Arc::new(Stdout)),
+                        // 2 -> stderr
+                        Some(Arc::new(Stdout)),
+                    ],
+                    exec_start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    priority: PRIORITY_DEFAULT,
+                    pass: Pass(0),
+                })
+            },
+        });
+        parent_inner.children.push(task_control_block.clone());
+        let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            kernel_stack_top,
+            trap_handler as usize,
+        );
+        task_control_block
+    }
+
     /// Load a new elf to replace the original application address space and start execution
     pub fn exec(&self, elf_data: &[u8]) {
         // memory_set with elf program headers/trampoline/trap context/user stack
@@ -148,10 +227,14 @@ impl TaskControlBlock {
             .ppn();
         // **** access inner exclusively
         let mut inner = self.inner_exclusive_access();
+        inner.exec_start_time = 0;
+        inner.syscall_times = [0; MAX_SYSCALL_NUM];
         // substitute memory_set
         inner.memory_set = memory_set;
         // update trap_cx ppn
         inner.trap_cx_ppn = trap_cx_ppn;
+        inner.pass = Pass(0);
+        inner.priority = PRIORITY_DEFAULT;
         // initialize trap_cx
         let trap_cx = inner.get_trap_cx();
         *trap_cx = TrapContext::app_init_context(
@@ -200,6 +283,10 @@ impl TaskControlBlock {
                     children: Vec::new(),
                     exit_code: 0,
                     fd_table: new_fd_table,
+                    exec_start_time: parent_inner.exec_start_time,
+                    syscall_times: parent_inner.syscall_times,
+                    priority: parent_inner.priority,
+                    pass: parent_inner.pass,
                 })
             },
         });
@@ -216,6 +303,49 @@ impl TaskControlBlock {
     }
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+
+    pub fn inc_syscall_time(&self, syscall_id: usize) {
+        let mut inner = self.inner_exclusive_access();
+        inner.syscall_times[syscall_id] += 1;
+    }
+
+    pub fn map_memory_set(&self, _start: usize, _len: usize, _port: usize) -> bool {
+        let need_page_num = (_len + PAGE_SIZE - 1) / PAGE_SIZE;
+        if get_allocatable_number() < need_page_num {
+            return false;
+        }
+        let start_va = VirtAddr::from(_start);
+        let end_va = VirtAddr::from(_start + _len);
+        let mut inner = self.inner_exclusive_access();
+        if inner.memory_set.is_mem_area_exists(start_va, end_va) {
+            return false;
+        }
+        inner.memory_set.insert_framed_area_in_user(start_va, end_va, _port);
+        true
+    }
+
+    pub fn unmap_memory_set(&self, _start: usize, _len: usize) -> bool {
+        let start_va = VirtAddr::from(_start);
+        let end_va = VirtAddr::from(_start + _len);
+        let mut inner = self.inner_exclusive_access();
+        if inner.memory_set.is_mem_area_not_exists(start_va, end_va) {
+            return false;
+        }
+        inner.memory_set.dealloc_framed_area(start_va, end_va);
+        true
+    }
+
+    pub fn set_priority(&self, prio: isize) {
+        self.inner_exclusive_access().priority = prio;
+    }
+
+    pub fn inc_pass(&self) {
+        let mut inner = self.inner_exclusive_access();
+        let pass_need_inc:u64 = BIG_STRIDE / (inner.priority as u64);
+        let current_pass = inner.pass.0;
+        let next_pass = (current_pass + pass_need_inc) % BIG_STRIDE;
+        inner.pass = Pass(next_pass);
     }
 }
 
