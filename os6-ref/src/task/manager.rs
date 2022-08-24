@@ -6,7 +6,6 @@
 
 use super::TaskControlBlock;
 use crate::sync::UPSafeCell;
-use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use lazy_static::*;
 use alloc::collections::BinaryHeap;
@@ -55,8 +54,8 @@ impl TaskManager {
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
         match self.ready_queue.pop() {
-            Some(taskPointer) => {
-                Some(taskPointer.0)
+            Some(task_pointer) => {
+                Some(task_pointer.0)
             }
             None => None,
         }

@@ -1,3 +1,5 @@
+use core::any::Any;
+use crate::fs::Object;
 use super::File;
 use crate::mm::{UserBuffer};
 use crate::sbi::console_getchar;
@@ -33,6 +35,13 @@ impl File for Stdin {
     }
 }
 
+impl Object for Stdin {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+
 impl File for Stdout {
     fn readable(&self) -> bool { false }
     fn writable(&self) -> bool { true }
@@ -44,5 +53,11 @@ impl File for Stdout {
             print!("{}", core::str::from_utf8(*buffer).unwrap());
         }
         user_buf.len()
+    }
+}
+
+impl Object for Stdout {
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

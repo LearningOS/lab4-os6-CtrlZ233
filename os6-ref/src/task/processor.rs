@@ -13,7 +13,6 @@ use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
 use crate::config::MAX_SYSCALL_NUM;
-use crate::task::task::Pass;
 use crate::timer::get_time_ms;
 
 /// Processor management structure

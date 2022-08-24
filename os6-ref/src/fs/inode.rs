@@ -8,8 +8,11 @@ use alloc::sync::Arc;
 use lazy_static::*;
 use bitflags::*;
 use alloc::vec::Vec;
+use core::any::Any;
+use crate::fs::Object;
 use super::File;
 use crate::mm::UserBuffer;
+use crate::print;
 
 /// A wrapper around a filesystem inode
 /// to implement File trait atop
@@ -56,6 +59,12 @@ impl OSInode {
         }
         v
     }
+
+    pub fn get_inode(&self) -> Arc<Inode> {
+        let mut inner = self.inner.exclusive_access();
+        inner.inode.clone()
+    }
+
 }
 
 lazy_static! {
@@ -165,5 +174,28 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+}
+
+pub fn linkat(old_name: &str, new_name: &str) -> isize {
+    if let Some(_inode) = ROOT_INODE.find(old_name) {
+        let inode_id = ROOT_INODE.get_inode_id_in_dir(old_name);
+        ROOT_INODE.linkat(new_name, inode_id);
+        return 0;
+    }
+    -1
+}
+
+pub fn unlinkat(name: &str) -> isize {
+    if let Some(_inode) = ROOT_INODE.find(name) {
+        ROOT_INODE.delete(name);
+        return 0;
+    }
+    -1
+}
+
+impl Object for OSInode{
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

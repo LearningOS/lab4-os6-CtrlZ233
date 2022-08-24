@@ -8,9 +8,7 @@ use crate::task::{
 use crate::fs::{open_file, OpenFlags};
 use crate::timer::{get_time_us, get_time_ms};
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 use crate::config::{MAX_SYSCALL_NUM, PRIORITY_MIN, PAGE_SIZE_BITS};
-use alloc::string::String;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -175,13 +173,14 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
 pub fn sys_spawn(_path: *const u8) -> isize {
     let token = current_user_token();
     let path = translated_str(token, _path);
-    let new_task = if let Some(data) = get_app_data_by_name(path.as_str()) {
-        current_task().unwrap().spawn(data)
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let all_data = app_inode.read_all();
+        let task = current_task().unwrap();
+        let new_task = task.spawn(all_data.as_slice());
+        let new_pid = new_task.pid.0;
+        add_task(new_task);
+        new_pid as isize
     } else {
-        return -1;
-    };
-
-    let new_pid = new_task.pid.0;
-    add_task(new_task);
-    new_pid as isize
+        -1
+    }
 }

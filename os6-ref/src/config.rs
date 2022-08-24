@@ -16,6 +16,11 @@ pub const BIG_STRIDE: u64 = 4095;
 pub const PRIORITY_DEFAULT: isize = 16;
 pub const PRIORITY_MIN: isize = 2;
 
+// pub const MMIO: &[(usize, usize)] = &[
+//     (0x10001000, 0x1000),
+// ];
+
 pub const MMIO: &[(usize, usize)] = &[
-    (0x10001000, 0x1000),
+    (0x0010_0000, 0x00_2000), // VIRT_TEST/RTC  in virt machine
+    (0x1000_1000, 0x00_1000), // Virtio Block in virt machine
 ];

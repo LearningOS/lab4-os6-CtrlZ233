@@ -27,6 +27,9 @@ extern crate log;
 
 extern crate alloc;
 
+use alloc::format;
+use crate::console::print;
+
 #[macro_use]
 mod console;
 mod config;

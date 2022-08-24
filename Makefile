@@ -48,7 +48,7 @@ test5: setup
 	cd ${DIR}/ci-user && make test CHAPTER=5
 
 test6: setup
-	cp -r os6 ${DIR}/os
+	cp -r os6-ref ${DIR}/os
 	cd ${DIR}/ci-user && make test CHAPTER=6
 
 test7: setup

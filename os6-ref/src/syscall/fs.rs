@@ -5,11 +5,12 @@ use crate::mm::translated_str;
 use crate::mm::translated_refmut;
 use crate::task::current_user_token;
 use crate::task::current_task;
-use crate::fs::open_file;
+use crate::fs::{open_file, linkat, unlinkat, OSInode, StatMode, Object};
 use crate::fs::OpenFlags;
 use crate::fs::Stat;
 use crate::mm::UserBuffer;
 use alloc::sync::Arc;
+use easy_fs::Inode;
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     let token = current_user_token();
@@ -81,13 +82,47 @@ pub fn sys_close(fd: usize) -> isize {
 
 // YOUR JOB: 扩展 easy-fs 和内核以实现以下三个 syscall
 pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-   -1
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    if _fd >= inner.fd_table.len()  {
+        return -1;
+    }
+
+    if let Some(dyn_inode) = inner.fd_table[_fd].clone() {
+        if let Some(os_inode) = dyn_inode.as_any().downcast_ref::<OSInode>() {
+            let inode = os_inode.get_inode();
+            let inode_mode = if inode.is_file() {
+                StatMode::FILE
+            } else if inode.is_file() {
+                StatMode::DIR
+            } else {
+                StatMode::NULL
+            };
+            let inode_id = inode.get_inode_id();
+            let inode_lnk = inode.get_nlink();
+            *translated_refmut(token, _st) = Stat {
+                dev: 0,
+                ino: inode_id,
+                mode: inode_mode,
+                nlink: inode_lnk,
+                pad: [0; 7],
+            };
+            return 0;
+        }
+    }
+    -1
 }
 
 pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    -1
+    let token = current_user_token();
+    let old_path = translated_str(token, _old_name);
+    let new_path = translated_str(token, _new_name);
+    linkat(old_path.as_str(), new_path.as_str())
 }
 
 pub fn sys_unlinkat(_name: *const u8) -> isize {
-    -1
+    let token = current_user_token();
+    let path = translated_str(token, _name);
+    unlinkat(path.as_str())
 }
