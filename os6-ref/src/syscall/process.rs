@@ -6,11 +6,9 @@ use crate::task::{
     suspend_current_and_run_next, TaskStatus,
 };
 use crate::fs::{open_file, OpenFlags};
-use crate::timer::get_time_us;
+use crate::timer::{get_time_us, get_time_ms};
 use alloc::sync::Arc;
-use alloc::vec::Vec;
-use crate::config::MAX_SYSCALL_NUM;
-use alloc::string::String;
+use crate::config::{MAX_SYSCALL_NUM, PRIORITY_MIN, PAGE_SIZE_BITS};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -112,31 +110,60 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 // YOUR JOB: 引入虚地址后重写 sys_get_time
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     let _us = get_time_us();
-    // unsafe {
-    //     *ts = TimeVal {
-    //         sec: us / 1_000_000,
-    //         usec: us % 1_000_000,
-    //     };
-    // }
+    // println!("[kernel] _us: {}", _us);
+    let token = current_user_token();
+    *translated_refmut(token, _ts) = TimeVal {
+        sec: _us / 1_000_000,
+        usec: _us % 1_000_000,
+    };
     0
 }
 
 // YOUR JOB: 引入虚地址后重写 sys_task_info
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
-    -1
+    let token = current_user_token();
+    let syscall_times = current_task().unwrap().inner_exclusive_access().syscall_times;
+    let exec_start_time = current_task().unwrap().inner_exclusive_access().exec_start_time;
+    *translated_refmut(token, ti) = TaskInfo {
+        status: TaskStatus::Running,
+        syscall_times,
+        time: get_time_ms() - exec_start_time,
+    };
+    0
 }
 
 // YOUR JOB: 实现sys_set_priority，为任务添加优先级
 pub fn sys_set_priority(_prio: isize) -> isize {
-    -1
+    if _prio < PRIORITY_MIN {
+        return -1;
+    }
+    current_task().unwrap().set_priority(_prio);
+    _prio
 }
 
 // YOUR JOB: 扩展内核以实现 sys_mmap 和 sys_munmap
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+    // 页对齐
+    if _start & ((1 << (PAGE_SIZE_BITS)) - 1) != 0 {
+        return -1;
+    }
+    if (_port & !0x7 != 0) || (_port & 0x7 == 0) {
+        return -1;
+    }
+    if current_task().unwrap().map_memory_set(_start, _len, _port) {
+        return 0;
+    }
     -1
 }
 
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+    // 页对齐
+    if _start & ((1 << (PAGE_SIZE_BITS)) - 1) != 0 {
+        return -1;
+    }
+    if current_task().unwrap().unmap_memory_set(_start, _len) {
+        return 0;
+    }
     -1
 }
 
@@ -144,5 +171,16 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
 // YOUR JOB: 实现 sys_spawn 系统调用
 // ALERT: 注意在实现 SPAWN 时不需要复制父进程地址空间，SPAWN != FORK + EXEC 
 pub fn sys_spawn(_path: *const u8) -> isize {
-    -1
+    let token = current_user_token();
+    let path = translated_str(token, _path);
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let all_data = app_inode.read_all();
+        let task = current_task().unwrap();
+        let new_task = task.spawn(all_data.as_slice());
+        let new_pid = new_task.pid.0;
+        add_task(new_task);
+        new_pid as isize
+    } else {
+        -1
+    }
 }

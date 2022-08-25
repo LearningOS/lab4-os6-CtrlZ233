@@ -1,19 +1,24 @@
 mod stdio;
 mod inode;
 
+use core::any::Any;
 use crate::mm::UserBuffer;
 
 /// The common abstraction of all IO resources
-pub trait File : Send + Sync {
+pub trait File : Send + Sync + Object {
     fn readable(&self) -> bool;
     fn writable(&self) -> bool;
     fn read(&self, buf: UserBuffer) -> usize;
     fn write(&self, buf: UserBuffer) -> usize;
 }
 
+pub trait Object {
+    fn as_any(&self) -> &dyn Any;
+}
+
 /// The stat of a inode
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Stat {
     /// ID of device containing file
     pub dev: u64,
@@ -24,7 +29,7 @@ pub struct Stat {
     /// number of hard links
     pub nlink: u32,
     /// unused pad
-    pad: [u64; 7],
+    pub pad: [u64; 7],
 }
 
 bitflags! {
@@ -40,4 +45,4 @@ bitflags! {
 }    
 
 pub use stdio::{Stdin, Stdout};
-pub use inode::{OSInode, open_file, OpenFlags, list_apps};
+pub use inode::{OSInode, open_file, OpenFlags, list_apps, linkat, unlinkat};

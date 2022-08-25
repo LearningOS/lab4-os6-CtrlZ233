@@ -1,5 +1,5 @@
 
-use virtio_drivers::{VirtIOBlk, VirtIOHeader};
+use virtio_drivers::{Hal, VirtIOBlk, VirtIOHeader};
 use crate::mm::{
     PhysAddr,
     VirtAddr,
@@ -16,10 +16,30 @@ use crate::sync::UPSafeCell;
 use alloc::vec::Vec;
 use lazy_static::*;
 
+pub struct HalImpl;
+
+impl Hal for HalImpl {
+    fn dma_alloc(pages: usize) -> usize {
+        virtio_dma_alloc(pages).0
+    }
+
+    fn dma_dealloc(paddr: usize, pages: usize) -> i32 {
+        virtio_dma_dealloc( PhysAddr::from(paddr), pages)
+    }
+
+    fn phys_to_virt(paddr: usize) -> usize {
+        virtio_phys_to_virt(PhysAddr::from(paddr)).0
+    }
+
+    fn virt_to_phys(vaddr: usize) -> usize {
+        virtio_virt_to_phys(VirtAddr::from(vaddr)).0
+    }
+}
+
 #[allow(unused)]
 const VIRTIO0: usize = 0x10001000;
 
-pub struct VirtIOBlock(UPSafeCell<VirtIOBlk<'static>>);
+pub struct VirtIOBlock(UPSafeCell<VirtIOBlk<'static, HalImpl>>);
 
 lazy_static! {
     static ref QUEUE_FRAMES: UPSafeCell<Vec<FrameTracker>> = unsafe { 
@@ -44,7 +64,7 @@ impl VirtIOBlock {
     #[allow(unused)]
     pub fn new() -> Self {
         unsafe {
-            Self(UPSafeCell::new(VirtIOBlk::new(
+            Self(UPSafeCell::new(VirtIOBlk::<HalImpl>::new(
                 &mut *(VIRTIO0 as *mut VirtIOHeader)
             ).unwrap()))
         }

@@ -12,6 +12,8 @@ use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
+use crate::config::MAX_SYSCALL_NUM;
+use crate::timer::get_time_ms;
 
 /// Processor management structure
 pub struct Processor {
@@ -52,9 +54,13 @@ pub fn run_tasks() {
     loop {
         let mut processor = PROCESSOR.exclusive_access();
         if let Some(task) = fetch_task() {
+            task.inc_pass();
             let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
             // access coming task TCB exclusively
             let mut task_inner = task.inner_exclusive_access();
+            if task_inner.exec_start_time == 0 {
+                task_inner.exec_start_time = get_time_ms();
+            }
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
             drop(task_inner);
@@ -102,4 +108,11 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+pub fn inc_syscall_time(syscall_id: usize) {
+    if syscall_id > MAX_SYSCALL_NUM {
+        panic!("Unsupported syscall_id: {}", syscall_id);
+    }
+    current_task().unwrap().inc_syscall_time(syscall_id);
 }
