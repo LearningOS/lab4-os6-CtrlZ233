@@ -13,7 +13,6 @@ use super::{
 use alloc::sync::Arc;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt::Debug;
 use spin::{Mutex, MutexGuard};
 
 /// Virtual filesystem layer over easy-fs
@@ -369,8 +368,6 @@ impl Inode {
         self.modify_disk_inode(|disk_inode| {
             let size = disk_inode.size;
             let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
-            assert_eq!(core::mem::size_of::<DiskInode>(), 128);
-            assert_eq!(format!("{:?}", data_blocks_dealloc), "dsd");
             assert!(data_blocks_dealloc.len() == DiskInode::total_blocks(size) as usize);
             for data_block in data_blocks_dealloc.into_iter() {
                 fs.dealloc_data(data_block);
